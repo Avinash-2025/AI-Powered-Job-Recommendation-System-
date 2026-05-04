@@ -1,4 +1,4 @@
-import { BarChart3, CheckCircle2, Target } from "lucide-react";
+import { Target } from "lucide-react";
 import { SkillGap } from "@/lib/api";
 
 interface Props {
@@ -8,51 +8,36 @@ interface Props {
 
 const SkillGapPanel = ({ gap, totalJobs }: Props) => {
   return (
-    <aside className="rounded-lg border bg-card p-5 shadow-sm">
-      <div className="mb-4 flex items-center justify-between">
+    <aside className="rounded-xl border border-white/60 bg-white/80 p-5 shadow-lg shadow-slate-200/50 backdrop-blur">
+      <div className="mb-4">
         <div>
-          <h2 className="text-xl font-semibold">Dashboard</h2>
-          <p className="text-sm text-muted-foreground">Recommendation summary and skill-gap analysis</p>
-        </div>
-        <BarChart3 className="h-6 w-6 text-primary" />
-      </div>
-
-      <div className="mb-5 grid grid-cols-2 gap-3">
-        <div className="rounded-md bg-secondary p-3">
-          <div className="text-2xl font-bold text-primary">{totalJobs}</div>
-          <div className="text-xs text-muted-foreground">recommended jobs</div>
-        </div>
-        <div className="rounded-md bg-secondary p-3">
-          <div className="text-2xl font-bold text-primary">{gap?.missing.length || 0}</div>
-          <div className="text-xs text-muted-foreground">skills to learn</div>
+          <h2 className="text-lg font-bold text-slate-950">Skill Gap</h2>
+          <p className="text-sm text-slate-500">A short list to improve your matches.</p>
         </div>
       </div>
 
-      <div className="mb-5">
-        <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
-          <CheckCircle2 className="h-4 w-4 text-success" />
-          Strengths
+      <div className="mb-4 grid grid-cols-2 gap-3">
+        <div className="rounded-xl bg-[#64FFDA]/20 p-3">
+          <div className="text-xl font-black text-[#0A192F]">{totalJobs}</div>
+          <div className="text-xs font-semibold text-slate-500">matches</div>
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {gap?.matched.length ? gap.matched.map((skill) => (
-            <span key={skill} className="rounded-md bg-success/10 px-2 py-1 text-xs font-medium text-success">
-              {skill}
-            </span>
-          )) : <span className="text-sm text-muted-foreground">Run recommendations to see matched skills.</span>}
+        <div className="rounded-xl bg-[#00ADB5]/10 p-3">
+          <div className="text-xl font-black text-[#0A192F]">{Math.min(gap?.missing.length || 0, 5)}</div>
+          <div className="text-xs font-semibold text-slate-500">tips</div>
         </div>
       </div>
 
       <div>
         <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
-          <Target className="h-4 w-4 text-amber-700" />
+          <Target className="h-4 w-4 text-[#00ADB5]" />
           Learn Next
         </div>
         <div className="flex flex-wrap gap-1.5">
-          {gap?.missing.length ? gap.missing.map((skill) => (
-            <span key={skill} className="rounded-md bg-amber-100 px-2 py-1 text-xs font-medium text-amber-800">
+          {gap?.missing.length ? gap.missing.slice(0, 5).map((skill) => (
+            <span key={skill} className="rounded-full bg-[#0A192F] px-2.5 py-1 text-xs font-bold text-white">
               {skill}
             </span>
-          )) : <span className="text-sm text-muted-foreground">Skill gaps will appear here.</span>}
+          )) : <span className="text-sm text-slate-500">Run recommendations to see tips.</span>}
         </div>
       </div>
     </aside>

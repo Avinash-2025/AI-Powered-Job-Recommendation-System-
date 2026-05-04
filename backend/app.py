@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from flask import Flask, jsonify, request
 
@@ -11,20 +12,48 @@ from database import (
     applied_job_ids,
     apply_job,
     authenticate,
+    create_job,
+    create_recruiter_job,
     create_user,
+    delete_job,
     get_user_by_token,
     init_db,
+    list_jobs as list_dynamic_jobs,
+    list_recruiter_jobs,
+    list_shortlisted_candidates,
     save_job,
     saved_job_ids,
+    search_candidates,
+    shortlist_candidate,
     unapply_job,
     unsave_job,
+    update_job,
     update_profile,
 )
-from recommender import build_roadmap, dataset_summary, get_skill_vocabulary, jobs_by_ids, recommend_jobs, search_jobs, skill_gap_for_jobs
+from dynamic_recommender import build_roadmap, dataset_summary, get_skill_vocabulary, invalidate_job_cache, jobs_by_ids, recommend_jobs, search_jobs, skill_gap_for_jobs
 from resume_parser import analyze_resume
+from services.career_service import build_job_alerts, interview_preparation
 
 
 app = Flask(__name__)
+
+
+def load_env_file() -> None:
+    env_path = Path(__file__).resolve().parent / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+load_env_file()
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "jobfinder-admin-token")
 init_db()
 
 ALLOWED_ORIGINS = {
@@ -50,11 +79,22 @@ def add_cors_headers(response):
 def options(_path):
     return ("", 204)
 
+from flask import render_template
+
+@app.route("/")
+def home():
+    return render_template("index.html")
 
 def current_user() -> dict | None:
     auth = request.headers.get("Authorization", "")
     token = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else None
     return get_user_by_token(token)
+
+
+def is_admin_request() -> bool:
+    auth = request.headers.get("Authorization", "")
+    token = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
+    return token == ADMIN_TOKEN
 
 
 @app.route("/api/health", methods=["GET"])
@@ -63,7 +103,7 @@ def health():
     return jsonify(
         {
             "status": "ok",
-            "engine": "TF-IDF + Cosine Similarity",
+            "engine": "TF-IDF + KNN",
             "jobs": summary["jobs"],
             "source": summary["source"],
             "dataset_file": summary["dataset_file"],
@@ -125,6 +165,45 @@ def jobs():
     return jsonify(payload)
 
 
+@app.route("/api/admin/login", methods=["POST"])
+def admin_login():
+    data = request.get_json(silent=True) or {}
+    if data.get("username") == ADMIN_USERNAME and data.get("password") == ADMIN_PASSWORD:
+        return jsonify({"token": ADMIN_TOKEN, "username": ADMIN_USERNAME})
+    return jsonify({"error": "Invalid admin username or password."}), 401
+
+
+@app.route("/api/admin/jobs", methods=["GET", "POST"])
+def admin_jobs():
+    if not is_admin_request():
+        return jsonify({"error": "Admin login required."}), 401
+    if request.method == "GET":
+        jobs_list = list_dynamic_jobs(limit=500)
+        return jsonify({"jobs": jobs_list, "total": len(jobs_list)})
+    try:
+        job = create_job(request.get_json(silent=True) or {})
+        invalidate_job_cache()
+        return jsonify({"job": job}), 201
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/admin/jobs/<int:job_id>", methods=["PUT", "DELETE"])
+def admin_job_detail(job_id: int):
+    if not is_admin_request():
+        return jsonify({"error": "Admin login required."}), 401
+    try:
+        if request.method == "DELETE":
+            delete_job(job_id)
+            invalidate_job_cache()
+            return jsonify({"deleted": True})
+        job = update_job(job_id, request.get_json(silent=True) or {})
+        invalidate_job_cache()
+        return jsonify({"job": job})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+
+
 @app.route("/api/skills", methods=["GET"])
 def skills():
     return jsonify({"skills": sorted(get_skill_vocabulary())})
@@ -140,13 +219,23 @@ def recommend():
     education = (data.get("education") or profile_data.get("education") or "").strip()
     experience = (data.get("experience") or profile_data.get("experience") or "").strip()
     location = (data.get("location") or profile_data.get("location") or "").strip()
+    preferred_role = (data.get("preferred_role") or profile_data.get("preferred_role") or "").strip()
+    salary_expectation = (data.get("salary_expectation") or profile_data.get("salary_expectation") or "").strip()
     top_n = int(data.get("top_n") or 5)
 
-    if not skills:
-        return jsonify({"error": "Please provide skills or complete your profile."}), 400
+    if not any([skills, education, experience, location, preferred_role, salary_expectation]):
+        return jsonify({"error": "Please provide skills or preferences first."}), 400
 
-    recommendations = recommend_jobs(skills, education, experience, location, top_n)
-    roadmap = build_roadmap(skills, recommendations, data.get("target_role", ""))
+    recommendations = recommend_jobs(
+        skills,
+        education,
+        experience,
+        location,
+        top_n,
+        preferred_role=preferred_role,
+        salary_expectation=salary_expectation,
+    )
+    roadmap = build_roadmap(skills, recommendations, data.get("target_role", preferred_role))
     return jsonify(
         {
             "jobs": recommendations,
@@ -158,6 +247,8 @@ def recommend():
                 "education": education,
                 "experience": experience,
                 "location": location,
+                "preferred_role": preferred_role,
+                "salary_expectation": salary_expectation,
             },
         }
     )
@@ -178,16 +269,76 @@ def roadmap():
     education = (data.get("education") or profile_data.get("education") or "").strip()
     experience = (data.get("experience") or profile_data.get("experience") or "").strip()
     location = (data.get("location") or profile_data.get("location") or "").strip()
-    target_role = data.get("target_role", "")
+    target_role = data.get("target_role", profile_data.get("preferred_role", ""))
 
-    if not skills:
-        return jsonify({"error": "Please provide skills before generating a roadmap."}), 400
+    roadmap_query = skills or target_role
+    if not roadmap_query:
+        return jsonify({"error": "Please provide skills or a dream role before generating a roadmap."}), 400
 
-    recommendations = recommend_jobs(skills, education, experience, location, 5)
+    recommendations = recommend_jobs(roadmap_query, education, experience, location, 5, preferred_role=target_role)
     return jsonify({
         "roadmap": build_roadmap(skills, recommendations, target_role),
         "skill_gap": skill_gap_for_jobs(skills, recommendations),
     })
+
+
+@app.route("/api/job-alerts", methods=["GET"])
+def job_alerts():
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Authentication required."}), 401
+    profile_data = user.get("profile", {})
+    recommendations = recommend_jobs(
+        profile_data.get("skills", ""),
+        profile_data.get("education", ""),
+        profile_data.get("experience", ""),
+        profile_data.get("location", ""),
+        5,
+        preferred_role=profile_data.get("preferred_role", ""),
+        salary_expectation=profile_data.get("salary_expectation", ""),
+    )
+    return jsonify({"alerts": build_job_alerts(recommendations)})
+
+
+@app.route("/api/interview-prep", methods=["POST"])
+def interview_prep():
+    data = request.get_json(silent=True) or {}
+    return jsonify(interview_preparation(data.get("role", ""), data.get("skills", "")))
+
+
+@app.route("/api/recruiter/jobs", methods=["GET", "POST"])
+def recruiter_jobs():
+    user = current_user()
+    if request.method == "GET":
+        return jsonify({"jobs": list_recruiter_jobs(user["id"] if user else None)})
+    if not user:
+        return jsonify({"error": "Authentication required."}), 401
+    data = request.get_json(silent=True) or {}
+    if not str(data.get("title", "")).strip():
+        return jsonify({"error": "Job title is required."}), 400
+    job = create_recruiter_job(user["id"], data)
+    return jsonify({"job": job}), 201
+
+
+@app.route("/api/recruiter/candidates", methods=["GET"])
+def recruiter_candidates():
+    query = request.args.get("q", "")
+    return jsonify({"candidates": search_candidates(query)})
+
+
+@app.route("/api/recruiter/shortlist", methods=["GET", "POST"])
+def recruiter_shortlist():
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Authentication required."}), 401
+    if request.method == "GET":
+        return jsonify({"candidates": list_shortlisted_candidates(user["id"])})
+    data = request.get_json(silent=True) or {}
+    candidate_id = int(data.get("candidate_id") or 0)
+    if not candidate_id:
+        return jsonify({"error": "candidate_id is required."}), 400
+    job_id = int(data.get("job_id") or 0) or None
+    return jsonify({"candidates": shortlist_candidate(user["id"], candidate_id, job_id)})
 
 
 @app.route("/api/upload", methods=["POST"])
@@ -203,16 +354,6 @@ def upload_resume():
         education=request.form.get("education", profile_data.get("education", "")),
         location=request.form.get("location", profile_data.get("location", "")),
     )
-
-    if user:
-        update_profile(
-            user["id"],
-            {
-                **profile_data,
-                "skills": " ".join(analysis["resume"]["skills"]) or profile_data.get("skills", ""),
-                "resume_text": analysis["resume"]["text"],
-            },
-        )
 
     return jsonify(analysis)
 

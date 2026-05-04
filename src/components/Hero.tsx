@@ -20,7 +20,7 @@ const Hero = () => {
           </div>
 
           <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold tracking-tight leading-[1.1] mb-6">
-            Find Your <span className="text-gradient">Dream Job</span>
+            Get matched to the right role
             <br />
             Instantly
           </h1>

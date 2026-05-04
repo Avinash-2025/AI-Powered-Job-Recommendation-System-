@@ -9,7 +9,17 @@ export interface JobRecommendation {
   education: string;
   skills: string;
   description: string;
+  apply_url?: string;
   match?: number;
+  final_score?: number;
+  tfidf_score?: number;
+  knn_score?: number;
+  skill_score?: number;
+  preference_score?: number;
+  preference_matches?: Record<string, number>;
+  content_score?: number;
+  collaborative_score?: number;
+  popularity?: number;
   matched_skills?: string[];
   missing_skills?: string[];
   source?: string;
@@ -18,8 +28,14 @@ export interface JobRecommendation {
 export interface Profile {
   skills: string;
   education: string;
+  branch?: string;
+  university?: string;
   experience: string;
+  roles?: string;
+  certifications?: string;
+  preferred_role?: string;
   location: string;
+  salary_expectation?: string;
   resume_text?: string;
 }
 
@@ -51,8 +67,49 @@ export interface RecommendationResponse {
   query: Profile;
 }
 
+export interface JobAlert {
+  id: number;
+  title: string;
+  company: string;
+  match: number;
+  message: string;
+}
+
+export interface InterviewPrepResponse {
+  role: string;
+  questions: string[];
+  tips: string[];
+}
+
+export interface RecruiterJob {
+  id: number;
+  title: string;
+  company: string;
+  location: string;
+  salary: string;
+  experience: string;
+  skills: string;
+  description: string;
+  created_at?: string;
+}
+
+export interface Candidate {
+  id: number;
+  name: string;
+  email: string;
+  skills: string;
+  education?: string;
+  experience?: string;
+  location?: string;
+  preferred_role?: string;
+  certifications?: string;
+  resume_rank?: number;
+  job_id?: number;
+}
+
 export interface ChatResponse {
   reply: string;
+  provider?: "gemini" | "local";
   jobs: JobRecommendation[];
   suggested_skills: string[];
   suggested_courses?: string[];
@@ -70,9 +127,17 @@ export interface JobListingsResponse {
 const API_BASE = "/api";
 
 async function parseResponse<T>(response: Response): Promise<T> {
-  const data = await response.json().catch(() => ({}));
+  const raw = await response.text();
+  let data: { error?: string } = {};
+  if (raw) {
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      data = {};
+    }
+  }
   if (!response.ok) {
-    throw new Error(data.error || "Request failed");
+    throw new Error(data.error || raw || `Request failed (${response.status})`);
   }
   return data as T;
 }

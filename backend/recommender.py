@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections import Counter
 import csv
+import heapq
 import math
 import re
 from functools import lru_cache
@@ -37,6 +38,7 @@ except Exception:  # pragma: no cover
 BASE_DIR = Path(__file__).resolve().parent
 REAL_DATASET_PATH = BASE_DIR / "dataset" / "real_job_postings.csv"
 NORMALIZED_DATASET_PATH = BASE_DIR / "dataset" / "jobs_real_enriched.csv"
+LEGACY_NORMALIZED_DATASET_PATH = BASE_DIR / "dataset" / "jobs_real_normalized.csv"
 FALLBACK_DATASET_PATH = BASE_DIR / "dataset" / "jobs.csv"
 
 EXP_LEVELS = ["Fresher", "1-3 years", "3-5 years", "5+ years"]
@@ -74,7 +76,40 @@ ALIASES = {
     "uiux": "ui ux",
     "uxui": "ux ui",
     "golang": "go",
+    "sklearn": "scikit-learn",
+    "scikit learn": "scikit-learn",
+    "ms excel": "excel",
+    "powerbi": "power bi",
 }
+
+RELATED_SKILLS = {
+    "python": {
+        "pandas", "numpy", "scikit-learn", "flask", "django", "fastapi", "matplotlib",
+        "seaborn", "data analysis", "machine learning", "automation", "scripting",
+    },
+    "machine learning": {
+        "ai", "artificial intelligence", "deep learning", "tensorflow", "pytorch",
+        "scikit-learn", "nlp", "data science", "modeling", "predictive analytics",
+    },
+    "artificial intelligence": {"ai", "machine learning", "deep learning", "nlp", "llm", "generative ai"},
+    "sql": {"mysql", "postgresql", "sqlite", "oracle", "database", "etl", "data warehouse", "query"},
+    "excel": {"spreadsheet", "pivot table", "data analysis", "reporting", "power bi", "dashboard"},
+    "power bi": {"dashboard", "data visualization", "excel", "analytics", "reporting", "dax"},
+    "react": {"javascript", "typescript", "frontend", "html", "css", "redux", "next.js"},
+    "node.js": {"javascript", "express", "backend", "api", "rest api"},
+    "javascript": {"react", "node.js", "typescript", "frontend", "web development"},
+    "aws": {"cloud", "ec2", "s3", "lambda", "devops", "cloud computing"},
+    "devops": {"ci cd", "docker", "kubernetes", "linux", "aws", "cloud", "monitoring"},
+    "communication": {"presentation", "writing", "customer support", "stakeholder management", "teamwork"},
+    "digital marketing": {"seo", "sem", "social media", "content marketing", "google ads", "analytics"},
+    "sales": {"lead generation", "crm", "business development", "negotiation", "customer relationship"},
+    "hr": {"recruiting", "talent acquisition", "employee relations", "onboarding", "payroll"},
+    "accounting": {"finance", "bookkeeping", "excel", "tax", "accounts payable", "accounts receivable"},
+}
+
+for _skill, _related in list(RELATED_SKILLS.items()):
+    for _other in list(_related):
+        RELATED_SKILLS.setdefault(_other, set()).add(_skill)
 
 STOPWORDS = {
     "a",
@@ -288,26 +323,21 @@ def _load_fallback_jobs() -> list[dict]:
     return rows
 
 
-def _load_normalized_jobs() -> list[dict]:
-    with NORMALIZED_DATASET_PATH.open(newline="", encoding="utf-8") as handle:
-        rows = list(csv.DictReader(handle))
+def _load_normalized_jobs(path: Path = NORMALIZED_DATASET_PATH) -> list[dict]:
+    if pd is not None:
+        rows = pd.read_csv(path).fillna("").to_dict("records")
+    else:
+        with path.open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
     jobs: list[dict] = []
     for row in rows:
         row["id"] = int(row["id"])
         row["source"] = row.get("source") or "will4381/job-posting-classification"
         row["_skill_list"] = [skill for skill in row.get("skill_list", "").split("||") if skill]
-        row["_text"] = " ".join(
-            [
-                row.get("title", ""),
-                row.get("company", ""),
-                row.get("skills", ""),
-                row.get("description", ""),
-                row.get("type", ""),
-            ]
-        )
-        row["_search"] = row.get("search_text") or clean_text(row["_text"])
-        row["_role"] = row.get("role_text") or clean_text(row.get("title", ""))
-        row["_location"] = row.get("location_text") or clean_text(row.get("location", ""))
+        row["_text"] = row.get("search_text") or " ".join([row.get("title", ""), row.get("company", ""), row.get("skills", ""), row.get("type", "")]).lower()
+        row["_search"] = row.get("search_text") or row["_text"]
+        row["_role"] = row.get("role_text") or str(row.get("title", "")).lower()
+        row["_location"] = row.get("location_text") or str(row.get("location", "")).lower()
         row["_salary_floor"] = int(row.get("salary_floor") or parse_salary_floor(row.get("salary", "")))
         jobs.append(row)
     return jobs
@@ -317,6 +347,8 @@ def _load_normalized_jobs() -> list[dict]:
 def load_jobs() -> list[dict]:
     if NORMALIZED_DATASET_PATH.exists():
         return _load_normalized_jobs()
+    if LEGACY_NORMALIZED_DATASET_PATH.exists():
+        return _load_normalized_jobs(LEGACY_NORMALIZED_DATASET_PATH)
     if REAL_DATASET_PATH.exists():
         if pd is not None:
             frame = pd.read_csv(REAL_DATASET_PATH)
@@ -330,7 +362,15 @@ def load_jobs() -> list[dict]:
 @lru_cache(maxsize=1)
 def dataset_summary() -> dict:
     jobs = load_jobs()
-    dataset_file = NORMALIZED_DATASET_PATH if NORMALIZED_DATASET_PATH.exists() else REAL_DATASET_PATH if REAL_DATASET_PATH.exists() else FALLBACK_DATASET_PATH
+    dataset_file = (
+        NORMALIZED_DATASET_PATH
+        if NORMALIZED_DATASET_PATH.exists()
+        else LEGACY_NORMALIZED_DATASET_PATH
+        if LEGACY_NORMALIZED_DATASET_PATH.exists()
+        else REAL_DATASET_PATH
+        if REAL_DATASET_PATH.exists()
+        else FALLBACK_DATASET_PATH
+    )
     return {
         "jobs": len(jobs),
         "source": jobs[0].get("source", "unknown") if jobs else "unknown",
@@ -446,19 +486,83 @@ def extract_known_skills(text: str, vocabulary: set[str] | None = None) -> list[
     return sorted(dict.fromkeys(matches))
 
 
+def _skill_forms(skill: str) -> set[str]:
+    clean = clean_text(skill)
+    forms = {clean}
+    forms.update(ALIASES.get(part, part) for part in clean.split())
+    forms.update(RELATED_SKILLS.get(clean, set()))
+    for token in clean.split():
+        forms.update(RELATED_SKILLS.get(token, set()))
+    return {item for item in forms if item}
+
+
+def _is_direct_skill_match(user_skill: str, job_skill: str) -> bool:
+    user = clean_text(user_skill)
+    job = clean_text(job_skill)
+    if not user or not job:
+        return False
+    if user == job or user in job or job in user:
+        return True
+    user_tokens = set(user.split())
+    job_tokens = set(job.split())
+    shared = user_tokens & job_tokens
+    return bool(shared and any(token not in GENERIC_SKILL_WORDS and len(token) > 2 for token in shared))
+
+
+def _is_related_skill_match(user_skill: str, job_skill: str) -> bool:
+    user_forms = _skill_forms(user_skill)
+    job_forms = _skill_forms(job_skill)
+    return bool(user_forms & job_forms)
+
+
+def calculate_skill_match(user_skills_text: str, job_skills_text: str | list[str]) -> dict:
+    """Return realistic skill alignment with direct and related matches."""
+    if isinstance(job_skills_text, list):
+        job_skills = [clean_text(skill) for skill in job_skills_text if clean_text(skill)]
+    else:
+        job_skills = split_skills(job_skills_text) or extract_known_skills(job_skills_text) or tokenize(job_skills_text)
+    user_skills = extract_known_skills(user_skills_text) or split_skills(user_skills_text) or tokenize(user_skills_text)
+
+    matched: list[str] = []
+    missing: list[str] = []
+    score_units = 0.0
+
+    for job_skill in sorted(dict.fromkeys(job_skills)):
+        direct = any(_is_direct_skill_match(user_skill, job_skill) for user_skill in user_skills)
+        related = False if direct else any(_is_related_skill_match(user_skill, job_skill) for user_skill in user_skills)
+        if direct:
+            matched.append(job_skill)
+            score_units += 1.0
+        elif related:
+            matched.append(job_skill)
+            score_units += 0.65
+        else:
+            missing.append(job_skill)
+
+    if not job_skills:
+        match = 0
+    else:
+        match = round((score_units / len(job_skills)) * 100)
+    return {
+        "match": max(0, min(100, match)),
+        "matched_skills": matched[:12],
+        "missing_skills": missing[:12],
+    }
+
+
 @lru_cache(maxsize=1)
 def _model_cache():
     jobs = load_jobs()
-    corpus = [clean_text(job.get("_text", "")) for job in jobs]
+    corpus = [job.get("_search") or clean_text(job.get("_text", "")) for job in jobs]
     if TfidfVectorizer is None or cosine_similarity is None:
         token_sets = [set(text.split()) for text in corpus]
         return {"jobs": jobs, "corpus": corpus, "token_sets": token_sets, "vectorizer": None, "matrix": None}
     vectorizer = TfidfVectorizer(
         token_pattern=r"(?u)\b[a-z0-9.+#-]+\b",
         ngram_range=(1, 2),
-        min_df=2 if len(corpus) > 1000 else 1,
+        min_df=3 if len(corpus) > 1000 else 1,
         max_df=0.92,
-        max_features=30000,
+        max_features=12000,
         sublinear_tf=True,
     )
     matrix = vectorizer.fit_transform(corpus)
@@ -482,6 +586,12 @@ def _similarity_scores(query: str) -> list[float]:
         return _fallback_similarity(query, cache["token_sets"])
     query_vector = cache["vectorizer"].transform([clean_text(query)])
     return cosine_similarity(query_vector, cache["matrix"]).flatten().tolist()
+
+
+def _top_similarity_indices(scores: list[float], limit: int = 500) -> list[int]:
+    if len(scores) <= limit:
+        return list(range(len(scores)))
+    return heapq.nlargest(limit, range(len(scores)), key=scores.__getitem__)
 
 
 def _experience_score(user_exp: str, job_exp: str) -> float:
@@ -524,34 +634,37 @@ def recommend_jobs(
     experience: str = "",
     location: str = "",
     top_n: int = 5,
+    preferred_role: str = "",
+    salary_expectation: str = "",
+    collaborative_job_ids: list[int] | None = None,
 ) -> list[dict]:
     if not skills.strip():
         return []
 
     cache = _model_cache()
     jobs = cache["jobs"]
-    query = " ".join([skills, education, experience, location])
+    query = " ".join([skills, education, experience, location, preferred_role])
     scores = _similarity_scores(query)
-    user_skills = set(extract_known_skills(skills)) or set(tokenize(skills))
+    collaborative_ids = set(collaborative_job_ids or [])
     candidates: list[dict] = []
 
-    for index, job in enumerate(jobs):
-        job_skills = set(job.get("_skill_list", []))
-        matched = sorted(
-            skill for skill in job_skills
-            if skill in user_skills or any(token in user_skills for token in skill.split())
+    for index in _top_similarity_indices(scores):
+        job = jobs[index]
+        skill_alignment = calculate_skill_match(skills, job.get("_skill_list", []) or job.get("skills", ""))
+        skill_score = skill_alignment["match"] / 100
+        content_score = (
+            0.56 * skill_score
+            + 0.20 * float(scores[index])
+            + 0.11 * _experience_score(experience, str(job.get("experience", "")))
+            + 0.08 * _location_score(location, str(job.get("location", "")))
+            + 0.05 * _education_score(education, str(job.get("education", "")))
         )
-        missing = sorted(skill for skill in job_skills if skill not in matched)
-        coverage = len(matched) / max(len(job_skills), 1)
-        composite = (
-            0.68 * float(scores[index])
-            + 0.16 * coverage
-            + 0.08 * _experience_score(experience, str(job.get("experience", "")))
-            + 0.05 * _location_score(location, str(job.get("location", "")))
-            + 0.03 * _education_score(education, str(job.get("education", "")))
-        )
+        role_boost = 0.04 if preferred_role and clean_text(preferred_role) in clean_text(str(job.get("title", ""))) else 0.0
+        salary_boost = 0.02 if salary_expectation and int(job.get("_salary_floor") or 0) else 0.0
+        collaborative_boost = 0.10 if int(job["id"]) in collaborative_ids else 0.0
+        composite = min(0.99, content_score + role_boost + salary_boost + collaborative_boost)
         match = min(99, max(1, round(composite * 100)))
-        if match < 8 and not matched:
+        if match < 12 and not skill_alignment["matched_skills"]:
             continue
         candidates.append(
             {
@@ -567,8 +680,10 @@ def recommend_jobs(
                 "description": job["description"],
                 "source": job.get("source", "real dataset"),
                 "match": match,
-                "matched_skills": matched[:10],
-                "missing_skills": missing[:12],
+                "content_score": round(content_score * 100),
+                "collaborative_score": 100 if int(job["id"]) in collaborative_ids else 0,
+                "matched_skills": skill_alignment["matched_skills"][:10],
+                "missing_skills": skill_alignment["missing_skills"][:12],
             }
         )
 
@@ -595,34 +710,70 @@ def build_roadmap(skills: str, jobs: list[dict], target_role: str = "") -> list[
     gap = skill_gap_for_jobs(skills, jobs)
     missing = gap["missing"][:12]
     target = target_role or (jobs[0]["title"] if jobs else "target role")
+    learning_steps = _learning_steps(target, missing)
     projects = _project_suggestions(target, missing)
+    prep_steps = _application_steps(target, gap["matched"], missing)
 
     return [
         {
-            "phase": "Phase 1",
-            "title": "Close Core Skill Gaps",
-            "duration": "2-4 weeks",
-            "items": missing[:4] or ["Add more target-role skills to your profile"],
-            "outcome": "You can explain and use the most common missing skills from real job postings.",
+            "phase": "Step 1",
+            "title": "Learn the Most Important Missing Skills",
+            "duration": "2-3 weeks",
+            "items": learning_steps,
+            "outcome": f"You understand the basic tools and words used in {target} job descriptions.",
         },
         {
-            "phase": "Phase 2",
-            "title": "Build Role-Specific Proof",
+            "phase": "Step 2",
+            "title": "Build One Simple Proof Project",
             "duration": "4-6 weeks",
             "items": projects,
-            "outcome": f"You have portfolio evidence for {target}.",
+            "outcome": f"You can show practical proof that you are ready for {target} work.",
         },
         {
-            "phase": "Phase 3",
-            "title": "Apply and Iterate",
-            "duration": "2 weeks",
-            "items": [
-                "Tailor resume bullets to the top matched skills",
-                "Apply to 10-15 similar roles",
-                "Track interview feedback and update your skill list",
-            ],
-            "outcome": "Your resume and applications are aligned with real market language.",
+            "phase": "Step 3",
+            "title": "Prepare Resume and Interview Answers",
+            "duration": "1-2 weeks",
+            "items": prep_steps,
+            "outcome": "Your resume, portfolio, and interview answers match the jobs you are applying for.",
         },
+    ]
+
+
+def _learning_steps(target_role: str, missing: list[str]) -> list[str]:
+    role = clean_text(target_role)
+    focus = missing[:4]
+    if not focus:
+        return [
+            "Pick 2-3 target jobs and note the repeated requirements",
+            "Strengthen the skills you already have with small daily practice",
+            "Learn basic workplace communication for your target role",
+        ]
+    if any(term in role for term in ("data", "machine learning", "scientist", "analyst", "ai")):
+        return [
+            f"Learn the basics of {focus[0]} with one beginner tutorial",
+            f"Practice {focus[1] if len(focus) > 1 else focus[0]} on a small dataset",
+            "Review SQL/data cleaning/model evaluation basics",
+            "Write short notes explaining what each skill is used for",
+        ]
+    if any(term in role for term in ("frontend", "react", "web", "full stack", "developer", "engineer")):
+        return [
+            f"Learn the basics of {focus[0]} by building small UI/API examples",
+            f"Practice {focus[1] if len(focus) > 1 else focus[0]} with one mini feature",
+            "Review Git, debugging, and clean code basics",
+            "Write down common interview questions for each missing skill",
+        ]
+    if any(term in role for term in ("marketing", "sales", "hr", "accounting", "support", "teacher", "content")):
+        return [
+            f"Learn what {focus[0]} means in daily job work",
+            f"Practice {focus[1] if len(focus) > 1 else focus[0]} with a simple real-life task",
+            "Collect 5 job posts and underline repeated responsibilities",
+            "Prepare examples that show communication, ownership, and problem solving",
+        ]
+    return [
+        f"Start with {focus[0]} and learn the beginner concepts",
+        f"Practice {focus[1] if len(focus) > 1 else focus[0]} using a small task",
+        "Compare your profile with 3 recommended jobs",
+        "Keep only useful skills in your resume and profile",
     ]
 
 
@@ -650,4 +801,15 @@ def _project_suggestions(target_role: str, missing: list[str]) -> list[str]:
         f"Build one portfolio project that uses {', '.join(missing[:3]) or 'your missing skills'}",
         "Write a case study explaining the problem, approach, and result",
         "Map each resume bullet to a requirement from the recommended jobs",
+    ]
+
+
+def _application_steps(target_role: str, matched: list[str], missing: list[str]) -> list[str]:
+    strongest = ", ".join(matched[:3]) or "your strongest skills"
+    improve = ", ".join(missing[:3]) or "one role-specific skill"
+    return [
+        f"Add 2 resume bullets that clearly show {strongest}",
+        f"Prepare one honest answer about how you are learning {improve}",
+        f"Apply to 10 {target_role or 'target role'} openings with 60%+ match first",
+        "Track responses and update your profile only with skills you truly know",
     ]

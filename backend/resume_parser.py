@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import re
 
-from recommender import build_roadmap, extract_known_skills, recommend_jobs, skill_gap_for_jobs
+from dynamic_recommender import build_roadmap, get_skill_vocabulary, recommend_jobs, skill_gap_for_jobs, split_skills
 
 try:
     from pypdf import PdfReader
@@ -14,6 +14,24 @@ except Exception:  # pragma: no cover
         from PyPDF2 import PdfReader
     except Exception:
         PdfReader = None
+
+
+EXTRA_SKILLS = {
+    "python", "java", "javascript", "typescript", "c", "c++", "c#", "sql", "mysql", "postgresql",
+    "mongodb", "sqlite", "html", "css", "react", "angular", "vue.js", "node.js", "express.js",
+    "django", "flask", "fastapi", "spring boot", "rest api", "git", "github", "docker",
+    "kubernetes", "aws", "azure", "google cloud", "linux", "devops", "ci/cd", "data structures",
+    "algorithms", "machine learning", "deep learning", "nlp", "computer vision", "generative ai",
+    "tensorflow", "pytorch", "scikit-learn", "pandas", "numpy", "statistics", "data analysis",
+    "data science", "data engineering", "etl", "excel", "power bi", "tableau", "data visualization",
+    "business analysis", "agile", "scrum", "project management", "product management", "ui/ux design",
+    "figma", "graphic design", "digital marketing", "seo", "google ads", "social media marketing",
+    "content writing", "copywriting", "email marketing", "sales", "lead generation", "crm",
+    "negotiation", "customer support", "communication", "presentation", "recruiting", "hr",
+    "onboarding", "accounting", "finance", "tally", "gst", "bookkeeping", "teaching",
+    "lesson planning", "data entry", "ms office", "cybersecurity", "network security",
+    "manual testing", "automation testing", "selenium",
+}
 
 
 def extract_text_from_pdf(file_storage) -> str:
@@ -40,7 +58,17 @@ def extract_text_from_pdf(file_storage) -> str:
 
 def summarize_resume(text: str) -> dict:
     normalized = re.sub(r"\s+", " ", text or " ").strip()
-    skills = extract_known_skills(normalized)
+    vocabulary = set(get_skill_vocabulary()) | EXTRA_SKILLS
+    lowered = normalized.lower()
+    skills = []
+    for skill in sorted(vocabulary, key=len, reverse=True):
+        if not skill:
+            continue
+        pattern = rf"(?<![a-z0-9+#.]){re.escape(skill.lower())}(?![a-z0-9+#.])"
+        if re.search(pattern, lowered):
+            skills.append(skill)
+    if not skills:
+        skills = split_skills(normalized)
     return {
         "text": normalized,
         "skills": skills[:30],
