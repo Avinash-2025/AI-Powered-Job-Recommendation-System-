@@ -199,9 +199,6 @@ const ProfileForm = ({ profile, loading, onChange, onSave, onRecommend }: Props)
         <button type="button" onClick={onSave} disabled={loading} className="rounded-lg border border-slate-200 bg-white px-5 py-2.5 text-sm font-bold text-slate-700 transition hover:border-[#00ADB5]">
           Save Profile
         </button>
-        <button type="button" onClick={onRecommend} disabled={loading} className="rounded-lg bg-[#00ADB5] px-5 py-2.5 text-sm font-bold text-white transition hover:bg-[#009aa1] disabled:opacity-60">
-          {loading ? "Finding..." : "Recommend Jobs"}
-        </button>
       </div>
     </section>
   );

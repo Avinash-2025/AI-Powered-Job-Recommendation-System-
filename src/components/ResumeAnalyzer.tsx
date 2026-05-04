@@ -1,5 +1,5 @@
-import { useCallback, useRef, useState } from "react";
-import { AlertCircle, CheckCircle2, FileUp, Upload, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AlertCircle, CheckCircle2, FileUp, Loader2, Upload, X } from "lucide-react";
 import { JobRecommendation, RoadmapStep, SkillGap, uploadResume } from "@/lib/api";
 
 interface Props {
@@ -14,10 +14,31 @@ interface Props {
 const ResumeAnalyzer = ({ token, experience, education, location, onAnalysis, onRecommend }: Props) => {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [skills, setSkills] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!loading) {
+      setProgress(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setProgress((p) => (p < 95 ? p + 1 : p));
+    }, 100); // ~9.5 seconds expected duration
+    return () => clearInterval(interval);
+  }, [loading]);
+
+  const cancelUpload = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      setLoading(false);
+      setError("Analysis cancelled.");
+    }
+  };
 
   const pickFile = (picked: File | null) => {
     if (!picked) return;
@@ -44,19 +65,24 @@ const ResumeAnalyzer = ({ token, experience, education, location, onAnalysis, on
     }
     setLoading(true);
     setError("");
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
     try {
       const form = new FormData();
       form.append("resume", file);
       form.append("experience", experience);
       form.append("education", education);
       form.append("location", location);
-      const response = await uploadResume(form, token);
+      const response = await uploadResume(form, token, abortController.signal);
       setSkills(response.resume.skills);
       onAnalysis(response.recommendations, response.skill_gap, response.resume.skills, response.roadmap);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Resume analysis failed. Please try again.");
     } finally {
-      setLoading(false);
+      if (!abortController.signal.aborted) {
+        setLoading(false);
+      }
     }
   };
 
@@ -125,19 +151,31 @@ const ResumeAnalyzer = ({ token, experience, education, location, onAnalysis, on
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={submit}
-          disabled={loading}
-          className={`inline-flex items-center justify-center gap-2 rounded-lg px-5 py-3 text-sm font-black text-white shadow-sm transition ${
-            file
-              ? "bg-[#00ADB5] hover:bg-[#009da5] active:scale-95"
-              : "bg-[#0A192F] hover:bg-[#0d2240]"
-          } disabled:opacity-60 disabled:cursor-not-allowed`}
-        >
-          <Upload className="h-4 w-4" />
-          {loading ? "Analyzing..." : file ? "Analyze Resume" : "Select File First"}
-        </button>
+        <div className="flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={submit}
+            disabled={loading}
+            className={`inline-flex items-center justify-center gap-2 rounded-lg px-5 py-3 text-sm font-black text-white shadow-sm transition ${
+              file
+                ? "bg-[#00ADB5] hover:bg-[#009da5] active:scale-95"
+                : "bg-[#0A192F] hover:bg-[#0d2240]"
+            } disabled:opacity-60 disabled:cursor-not-allowed`}
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+            {loading ? `Analyzing... ${progress}%` : file ? "Analyze Resume" : "Select File First"}
+          </button>
+          {loading && (
+            <button
+              type="button"
+              onClick={cancelUpload}
+              className="inline-flex items-center justify-center gap-2 rounded-lg px-5 py-3 text-sm font-black bg-red-500 text-white shadow-sm transition hover:bg-red-600 active:scale-95"
+            >
+              <X className="h-4 w-4" />
+              Cancel Analysis
+            </button>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -157,13 +195,22 @@ const ResumeAnalyzer = ({ token, experience, education, location, onAnalysis, on
               </span>
             ))}
           </div>
-          <button
-            type="button"
-            onClick={() => onRecommend(skills)}
-            className="mt-4 rounded-lg bg-[#00ADB5] px-4 py-2.5 text-sm font-black text-white shadow-sm transition hover:bg-[#009da5] active:scale-95"
-          >
-            Recommend from Resume Skills
-          </button>
+          <div className="mt-4 flex gap-2">
+            <button
+              type="button"
+              onClick={() => onRecommend(skills)}
+              className="rounded-lg bg-[#00ADB5] px-4 py-2.5 text-sm font-black text-white shadow-sm transition hover:bg-[#009da5] active:scale-95"
+            >
+              Recommend from Resume Skills
+            </button>
+            <button
+              type="button"
+              onClick={clearFile}
+              className="rounded-lg border border-emerald-200 bg-white px-4 py-2.5 text-sm font-black text-slate-700 shadow-sm transition hover:bg-emerald-50 active:scale-95"
+            >
+              Clear
+            </button>
+          </div>
         </div>
       )}
     </section>

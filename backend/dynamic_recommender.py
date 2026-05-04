@@ -27,12 +27,17 @@ RELATED = {
     "ai": {"machine learning", "artificial intelligence", "deep learning", "nlp", "computer vision", "generative ai"},
     "sql": {"database", "mysql", "postgresql", "sqlite", "etl"},
     "excel": {"spreadsheet", "power bi", "data analysis", "reporting", "dashboarding"},
-    "react": {"javascript", "typescript", "frontend", "html", "css", "ui development"},
-    "digital marketing": {"seo", "social media", "google ads", "analytics"},
+    "react": {"javascript", "typescript", "frontend", "html", "css", "ui development", "next.js"},
+    "javascript": {"typescript", "react", "node.js", "frontend", "angular", "vue.js", "express.js"},
+    "java": {"spring boot", "backend", "object oriented programming", "c++", "c#"},
+    "aws": {"cloud computing", "azure", "google cloud", "devops", "cloud engineer"},
+    "devops": {"ci/cd", "aws", "docker", "kubernetes", "linux", "cloud computing"},
+    "digital marketing": {"seo", "social media", "google ads", "analytics", "content marketing"},
     "hr": {"recruiting", "talent acquisition", "onboarding", "communication"},
     "communication": {"customer support", "sales", "hr", "business communication", "presentation"},
-    "sales": {"business development", "lead generation", "crm", "negotiation"},
+    "sales": {"business development", "lead generation", "crm", "negotiation", "b2b"},
     "accounting": {"finance", "bookkeeping", "tally", "gst", "financial reporting"},
+    "testing": {"automation testing", "manual testing", "selenium", "qa", "quality assurance"},
 }
 for key, values in list(RELATED.items()):
     for value in values:
@@ -259,7 +264,7 @@ def _model():
     skill_lists = [job["_skill_list"] for job in jobs]
     if not jobs or TfidfVectorizer is None:
         return {"jobs": jobs, "tfidf": None, "matrix": None, "mlb": None, "knn": None}
-    tfidf = TfidfVectorizer(ngram_range=(1, 2), min_df=1, max_features=8000)
+    tfidf = TfidfVectorizer(ngram_range=(1, 2), min_df=1, max_features=8000, token_pattern=r"(?u)[a-z0-9.+#-]+")
     matrix = tfidf.fit_transform(corpus)
     mlb = MultiLabelBinarizer()
     skill_matrix = mlb.fit_transform(skill_lists)
@@ -299,7 +304,7 @@ def calculate_skill_match(user_skills: str, job_skills: str | list[str]) -> dict
             missing.append(job_skill)
     user_coverage = len({skill for skill in users if any(skill == job_skill or skill in job_skill or job_skill in skill or _forms(skill) & _forms(job_skill) for job_skill in jobs)}) / max(len(users), 1)
     job_coverage = units / max(len(jobs), 1)
-    score = (job_coverage * 0.72) + (user_coverage * 0.28)
+    score = (job_coverage * 0.45) + (user_coverage * 0.55)
     if not users:
         score = 0.0
     return {"match": round(score * 100), "score": round(score, 4), "matched_skills": matched[:12], "missing_skills": missing[:12]}
@@ -333,12 +338,15 @@ def recommend_jobs(skills: str, education: str = "", experience: str = "", locat
         text_score = float(tfidf_norm[index])
         knn_score = float(knn_scores[index])
         if has_skills:
-            final = (skill_score * 0.48) + (knn_score * 0.22) + (text_score * 0.18) + (preference_score * 0.12)
+            final = (skill_score * 0.38) + (preference_score * 0.32) + (knn_score * 0.15) + (text_score * 0.15)
         else:
-            final = (text_score * 0.52) + (preference_score * 0.48)
+            final = (text_score * 0.40) + (preference_score * 0.60)
         location_preference = preference_matches.get("location")
         if location_preference is not None:
-            final *= 0.35 + (0.65 * location_preference)
+            final *= 0.30 + (0.70 * location_preference)
+        role_preference = preference_matches.get("role")
+        if role_preference is not None:
+            final *= 0.40 + (0.60 * role_preference)
         if has_skills and skill_score < 0.12 and preference_matches.get("role", 0) < 0.5:
             continue
         if final < 0.08:

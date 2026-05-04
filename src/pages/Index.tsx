@@ -206,6 +206,7 @@ const Index = () => {
   const [savedJobIds, setSavedJobIds] = useState<number[]>([]);
   const [appliedJobIds, setAppliedJobIds] = useState<number[]>([]);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
@@ -213,6 +214,18 @@ const Index = () => {
   const [status, setStatus] = useState("");
   const [recommendMode, setRecommendMode] = useState<RecommendMode>("manual");
   const [manualProfile, setManualProfile] = useState<Profile>(emptyProfile);
+
+  useEffect(() => {
+    if (!loading) {
+      setProgress(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setProgress((p) => (p < 95 ? p + 1 : p));
+    }, 60); // ~5.7 seconds expected duration
+    return () => clearInterval(interval);
+  }, [loading]);
+
 
   const skillList = useMemo(() => splitSkills(profile.skills).slice(0, 8), [profile.skills]);
   const searchSuggestions = useMemo(() => {
@@ -395,18 +408,12 @@ const Index = () => {
         location: profile.location,
         role: "",
         min_salary: "",
-        limit: "8",
+        limit: "100",
       });
       const response = await apiGet<JobListingsResponse>(`/jobs?${params.toString()}`);
-      if (activeView === "dashboard") {
-        setDashboardSearchResults(response.jobs);
-      } else {
-        setSearchResults(response.jobs);
-      }
+      setSearchResults(response.jobs);
       setStatus(`Found ${response.total.toLocaleString()} jobs.`);
-      if (activeView !== "dashboard") {
-        setActiveView("jobs");
-      }
+      setActiveView("jobs");
       setSearchFocused(false);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Job search failed.");
@@ -423,7 +430,7 @@ const Index = () => {
         location: "",
         role: "",
         min_salary: "",
-        limit: "8",
+        limit: "100",
       });
       const response = await apiGet<JobListingsResponse>(`/jobs?${params.toString()}`);
       setSearchResults(response.jobs);
@@ -531,6 +538,10 @@ const Index = () => {
     setSearchFocused(false);
     if (view !== "applications") setTrackedFilter("");
     if (view === "jobs") void refreshJobsPage();
+    if (view === "roadmap") {
+      setRoadmap([]);
+      setGap(null);
+    }
   };
 
   if (!user) {
@@ -693,7 +704,7 @@ const Index = () => {
                           <span key={skill} className="rounded-full bg-[#0A192F] px-3 py-1.5 text-xs font-bold text-white">{skill}</span>
                         ))}
                       </div>
-                      <SuggestionStrip onPick={(value) => void searchJobs(value)} />
+
                     </div>
                     <div className="rounded-2xl border border-[#00ADB5]/20 bg-[#64FFDA]/20 p-5">
                       <div className="text-sm font-black text-[#007a80]">Best Match</div>
@@ -749,7 +760,7 @@ const Index = () => {
                         disabled={loading}
                         className="rounded-lg bg-[#00ADB5] px-5 py-2.5 text-sm font-black text-white disabled:opacity-60"
                       >
-                        {loading && recommendMode === "profile" ? "Finding..." : "Recommend from profile"}
+                        {loading && recommendMode === "profile" ? `Finding... ${progress}%` : "Recommend from profile"}
                       </button>
                     </div>
                   ) : (
@@ -795,7 +806,7 @@ const Index = () => {
                           }
                           className="rounded-lg bg-[#00ADB5] px-5 py-2.5 text-sm font-black text-white disabled:opacity-60"
                         >
-                          {loading && recommendMode === "manual" ? "Finding..." : "Recommend from preferences"}
+                          {loading && recommendMode === "manual" ? `Finding... ${progress}%` : "Recommend from preferences"}
                         </button>
                       </div>
                     </div>
@@ -821,9 +832,24 @@ const Index = () => {
                       <h2 className="text-xl font-bold text-slate-950">{dashboardSearchResults.length ? "Search Results" : "Recommended Jobs"}</h2>
                       <p className="text-sm text-slate-500">Click a job title to read the job description.</p>
                     </div>
-                    <button type="button" onClick={() => void runRecommendation(profile, true, true)} disabled={loading} className="rounded-lg bg-[#0A192F] px-4 py-2 text-sm font-bold text-white disabled:opacity-60">
-                      {loading ? "Finding..." : "Recommend"}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {(dashboardSearchResults.length > 0 || jobs.length > 0) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setJobs([]);
+                            setDashboardSearchResults([]);
+                            setStatus("Recommendations cleared.");
+                          }}
+                          className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+                        >
+                          Clear
+                        </button>
+                      )}
+                      <button type="button" onClick={() => void runRecommendation(profile, true, true)} disabled={loading} className="rounded-lg bg-[#0A192F] px-4 py-2 text-sm font-bold text-white disabled:opacity-60">
+                        {loading ? `Finding... ${progress}%` : "Recommend"}
+                      </button>
+                    </div>
                   </div>
                   {status && <div className="mb-4 rounded-lg bg-[#64FFDA]/20 px-3 py-2 text-sm font-bold text-[#0A192F]">{status}</div>}
                   <JobList jobs={dashboardSearchResults.length ? dashboardSearchResults : jobs} empty="No recommendations yet. Enter profile or manual preferences, then click Recommend." savedJobIds={savedJobIds} appliedJobIds={appliedJobIds} onToggleSave={toggleSave} onApply={applyJob} />
@@ -870,13 +896,26 @@ const Index = () => {
                         <h2 className="text-xl font-bold text-slate-950">Resume Recommended Jobs</h2>
                         <p className="text-sm text-slate-500">These matches are based only on skills extracted from your resume.</p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setActiveView("jobs")}
-                        className="rounded-lg bg-[#0A192F] px-4 py-2 text-sm font-bold text-white"
-                      >
-                        Open Jobs Page
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setResumeJobs([]);
+                            setJobs([]);
+                            setStatus("Resume recommendations cleared.");
+                          }}
+                          className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+                        >
+                          Clear
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveView("jobs")}
+                          className="rounded-lg bg-[#0A192F] px-4 py-2 text-sm font-bold text-white"
+                        >
+                          Open Jobs Page
+                        </button>
+                      </div>
                     </div>
                     <JobList jobs={resumeJobs} empty="Upload and analyze a resume to see matches." savedJobIds={savedJobIds} appliedJobIds={appliedJobIds} onToggleSave={toggleSave} onApply={applyJob} />
                   </section>
@@ -915,8 +954,8 @@ const Index = () => {
                   {searchLoading ? "Refreshing..." : "Refresh Jobs"}
                 </button>
               </div>
-              <SuggestionStrip onPick={(value) => void searchJobs(value)} />
-              <JobList jobs={searchResults.slice(0, 8)} empty="Click Refresh Jobs to load dataset jobs, or search for a role or skill." savedJobIds={savedJobIds} appliedJobIds={appliedJobIds} onToggleSave={toggleSave} onApply={applyJob} />
+
+              <JobList jobs={searchResults} empty="Click Refresh Jobs to load dataset jobs, or search for a role or skill." savedJobIds={savedJobIds} appliedJobIds={appliedJobIds} onToggleSave={toggleSave} onApply={applyJob} />
             </section>
           )}
 
@@ -1054,23 +1093,7 @@ const StatCard = ({ icon: Icon, label, value, helper, onClick }: StatCardProps) 
   </article>
 );
 
-const SuggestionStrip = ({ onPick }: { onPick: (value: string) => void }) => (
-  <div className="mt-4">
-    <div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-400">Popular jobs and skills</div>
-    <div className="flex flex-wrap gap-2">
-      {popularSuggestions.map((item) => (
-        <button
-          key={item}
-          type="button"
-          onClick={() => onPick(item)}
-          className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-600 shadow-sm transition hover:border-[#00ADB5] hover:text-[#007a80]"
-        >
-          {item}
-        </button>
-      ))}
-    </div>
-  </div>
-);
+
 
 const filterJobs = (jobs: JobRecommendation[], query: string) => {
   const normalized = query.trim().toLowerCase();

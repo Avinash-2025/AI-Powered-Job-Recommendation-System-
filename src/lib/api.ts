@@ -146,7 +146,7 @@ export function authHeaders(token: string | null) {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-export async function apiPost<T>(path: string, body: unknown, token: string | null = null): Promise<T> {
+export async function apiPost<T>(path: string, body: unknown, token: string | null = null, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: {
@@ -154,11 +154,12 @@ export async function apiPost<T>(path: string, body: unknown, token: string | nu
       ...authHeaders(token),
     },
     body: JSON.stringify(body),
+    signal,
   });
   return parseResponse<T>(response);
 }
 
-export async function apiPut<T>(path: string, body: unknown, token: string | null = null): Promise<T> {
+export async function apiPut<T>(path: string, body: unknown, token: string | null = null, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: "PUT",
     headers: {
@@ -166,22 +167,25 @@ export async function apiPut<T>(path: string, body: unknown, token: string | nul
       ...authHeaders(token),
     },
     body: JSON.stringify(body),
+    signal,
   });
   return parseResponse<T>(response);
 }
 
-export async function apiGet<T>(path: string, token: string | null = null): Promise<T> {
+export async function apiGet<T>(path: string, token: string | null = null, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: authHeaders(token),
+    signal,
   });
   return parseResponse<T>(response);
 }
 
-export async function uploadResume(formData: FormData, token: string | null) {
+export async function uploadResume(formData: FormData, token: string | null, signal?: AbortSignal) {
   const response = await fetch(`${API_BASE}/upload`, {
     method: "POST",
     headers: authHeaders(token),
     body: formData,
+    signal,
   });
   return parseResponse<{
     resume: { text: string; skills: string[]; word_count: number };

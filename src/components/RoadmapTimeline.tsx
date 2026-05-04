@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { CheckCircle2, Flag, Search, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { CheckCircle2, Flag, Loader2, Search, X } from "lucide-react";
 import { apiPost, Profile, RoadmapStep, SkillGap } from "@/lib/api";
 
 interface Props {
@@ -37,11 +37,27 @@ const roadmapRoleSuggestions = [
 ];
 
 const RoadmapTimeline = ({ token, profile, initialRoadmap, initialGap }: Props) => {
-  const [targetRole, setTargetRole] = useState(profile.preferred_role || "Machine Learning Engineer");
+  const [targetRole, setTargetRole] = useState("");
   const [roadmap, setRoadmap] = useState<RoadmapStep[]>(initialRoadmap);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    setRoadmap(initialRoadmap);
+  }, [initialRoadmap]);
+
+  useEffect(() => {
+    if (!loading) {
+      setProgress(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setProgress((p) => (p < 95 ? p + 1 : p));
+    }, 80); // ~7.6 seconds expected duration
+    return () => clearInterval(interval);
+  }, [loading]);
   const suggestions = useMemo(() => {
     const query = targetRole.trim().toLowerCase();
     if (!query) return roadmapRoleSuggestions.slice(0, 8);
@@ -143,9 +159,24 @@ const RoadmapTimeline = ({ token, profile, initialRoadmap, initialGap }: Props) 
               </div>
             )}
           </div>
-          <button type="button" onClick={generate} disabled={loading} className="rounded-lg bg-[#0A192F] px-4 py-2 text-sm font-bold text-white disabled:opacity-60">
-            {loading ? "Building" : "Build"}
-          </button>
+          <div className="flex gap-2">
+            {roadmap.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setRoadmap([]);
+                  setTargetRole("");
+                }}
+                className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+              >
+                Clear
+              </button>
+            )}
+            <button type="button" onClick={generate} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#0A192F] px-4 py-2 text-sm font-bold text-white disabled:opacity-60">
+              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+              {loading ? `Building... ${progress}%` : "Build"}
+            </button>
+          </div>
         </div>
       </div>
 
